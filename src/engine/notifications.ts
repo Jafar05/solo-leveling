@@ -85,3 +85,65 @@ export function setupNotificationHandler(): void {
     // ignore
   }
 }
+
+/**
+ * Планирует напоминание о незавершённом квесте.
+ * Ежедневные: через 30 мин и 1 час.
+ * Сюжетные / Боссы: через 2 часа.
+ * Возвращает массив идентификаторов уведомлений (для отмены при завершении).
+ */
+export async function scheduleQuestReminders(
+  questId: string,
+  questTitle: string,
+  isDaily: boolean
+): Promise<string[]> {
+  if (!Notifications || Platform.OS === 'web') return [];
+  try {
+    const ids: string[] = [];
+
+    if (isDaily) {
+      const id1 = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '⏳ Квест ещё не выполнен',
+          body: `"${questTitle}" — прошло 30 минут. Не забудь завершить!`,
+          sound: true,
+        },
+        trigger: { type: 'timeInterval', seconds: 30 * 60, repeats: false },
+      });
+      const id2 = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🔥 Квест ждёт тебя',
+          body: `"${questTitle}" — уже час. Завершай задание!`,
+          sound: true,
+        },
+        trigger: { type: 'timeInterval', seconds: 60 * 60, repeats: false },
+      });
+      ids.push(id1, id2);
+    } else {
+      const id = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '⚔️ Квест в процессе',
+          body: `"${questTitle}" — прошло 2 часа. Ты ещё в бою!`,
+          sound: true,
+        },
+        trigger: { type: 'timeInterval', seconds: 2 * 60 * 60, repeats: false },
+      });
+      ids.push(id);
+    }
+
+    return ids;
+  } catch (e) {
+    console.warn('Quest reminder scheduling failed:', e);
+    return [];
+  }
+}
+
+/** Отменяет уведомления-напоминания по их идентификаторам. */
+export async function cancelQuestReminders(notificationIds: string[]): Promise<void> {
+  if (!Notifications || notificationIds.length === 0) return;
+  try {
+    await Promise.all(notificationIds.map((id) => Notifications.cancelScheduledNotificationAsync(id)));
+  } catch {
+    // ignore
+  }
+}

@@ -10,11 +10,14 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useCharacterStore } from '../store/useCharacterStore';
-import { useQuestStore } from '../store/useQuestStore';
+import { useQuestStore, QuestType, CompletedQuestRecord } from '../store/useQuestStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { buildBehavioralProfile } from '../engine/adaptiveEngine';
 import { GeneratedQuest } from '../engine/questAI';
-import { DAILY_QUESTS, STORY_QUESTS, BOSS_QUESTS } from '../data/quests';
+import {
+  scheduleQuestReminders,
+  cancelQuestReminders,
+} from '../engine/notifications';
 import {
   COLORS,
   STAT_COLORS,
@@ -23,17 +26,81 @@ import {
   SPACING,
   BORDER_RADIUS,
 } from '../theme';
-import { StatKey } from '../engine/types';
 
-type Tab = 'daily' | 'story' | 'boss';
+type Tab = 'daily' | 'story' | 'boss' | 'history';
 
 function isQuestExpired(quest: GeneratedQuest): boolean {
   if (!quest.expiresAt) return false;
   return Date.now() > quest.expiresAt;
 }
 
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h} ч ${m} мин`;
+  if (m > 0) return `${m} мин ${s} с`;
+  return `${s} с`;
+}
+
+function formatElapsed(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// ─── Живой таймер ─────────────────────────────────────────────────────────────
+
+function QuestTimer({ startedAt }: { startedAt: number }) {
+  const [elapsed, setElapsed] = useState(Math.floor((Date.now() - startedAt) / 1000));
+
+  useEffect(() => {
+    const interval = setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000
+    );
+    return () => clearInterval(interval);
+  }, [startedAt]);
+
+  return <Text style={styles.timerText}>⏱ {formatElapsed(elapsed)}</Text>;
+}
+
+// ─── Карточка истории ──────────────────────────────────────────────────────────
+
+function HistoryCard({ record }: { record: CompletedQuestRecord }) {
+  const statColor = STAT_COLORS[record.stat];
+  const completedDate = new Date(record.completedAt);
+  const dateStr = completedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+
+  return (
+    <View style={[styles.questCard, styles.historyCard, { borderLeftColor: statColor }]}>
+      <View style={styles.questHeader}>
+        <Text style={styles.questEmoji}>{record.emoji}</Text>
+        <View style={styles.questInfo}>
+          <Text style={[styles.questTitle, styles.questTitleDone]}>{record.title}</Text>
+          <Text style={styles.questDesc}>{dateStr}</Text>
+        </View>
+      </View>
+      <View style={styles.questFooter}>
+        <Text style={[styles.questXP, { color: statColor }]}>+{record.xpReward} XP</Text>
+        <View style={styles.historyMeta}>
+          {record.durationSeconds !== null && (
+            <Text style={styles.historyDuration}>⏱ {formatDuration(record.durationSeconds)}</Text>
+          )}
+          <Text style={styles.questComplete}>✅ Выполнено</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ─── Основной экран ────────────────────────────────────────────────────────────
+
 export const QuestsScreen: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('daily');
+  const [historyTab, setHistoryTab] = useState<QuestType>('daily');
 
   const { character, actionLogs, dailyStats, completeQuest: charCompleteQuest } = useCharacterStore();
   const { deepseekApiKey } = useSettingsStore();
@@ -42,33 +109,38 @@ export const QuestsScreen: React.FC = () => {
     () => buildBehavioralProfile(actionLogs, character.stats, dailyStats),
     [actionLogs, character.stats, dailyStats]
   );
+
   const {
     dailyQuests,
     storyQuests,
     bossQuests,
-    completedIds,
+    questHistory,
     isGenerating,
     generateError,
     checkAndApplyDayRollover,
     refreshUncompletedQuests,
     generateStoryQuests,
     generateBossQuests,
+    startQuest,
+    setQuestNotificationIds,
     completeQuest,
     completePunishment,
     isQuestCompleted,
+    isQuestStarted,
+    getQuestStartedAt,
     getActivePunishments,
+    getHistoryByType,
+    questNotificationIds,
   } = useQuestStore();
 
   const activePunishments = getActivePunishments();
 
-  // При открытии — проверяем смену дня
   useEffect(() => {
     if (deepseekApiKey) {
       checkAndApplyDayRollover(character.stats, deepseekApiKey, adaptiveProfile);
     }
   }, []);
 
-  // Автогенерация story/boss если пустые
   useEffect(() => {
     if (!deepseekApiKey) return;
     if (storyQuests.length === 0) generateStoryQuests(character.stats, deepseekApiKey, adaptiveProfile);
@@ -82,9 +154,26 @@ export const QuestsScreen: React.FC = () => {
     if (activeTab === 'boss') await generateBossQuests(character.stats, deepseekApiKey, adaptiveProfile);
   };
 
-  const handleComplete = (quest: GeneratedQuest) => {
+  const handleStart = async (quest: GeneratedQuest, questType: QuestType) => {
+    startQuest(quest.id);
+    const ids = await scheduleQuestReminders(quest.id, quest.title, questType === 'daily');
+    if (ids.length > 0) setQuestNotificationIds(quest.id, ids);
+  };
+
+  const handleComplete = async (quest: GeneratedQuest, questType: QuestType) => {
     if (isQuestCompleted(quest.id)) return;
-    completeQuest(quest.id);
+
+    // Отменяем запланированные уведомления для этого квеста
+    const notifIds = questNotificationIds[quest.id];
+    if (notifIds?.length) await cancelQuestReminders(notifIds);
+
+    completeQuest(quest.id, {
+      title: quest.title,
+      emoji: quest.emoji,
+      stat: quest.stat,
+      xpReward: quest.xpReward,
+      questType,
+    });
     charCompleteQuest(quest.id, quest.stat, quest.xpReward);
   };
 
@@ -93,11 +182,9 @@ export const QuestsScreen: React.FC = () => {
     return character.stats[quest.requiredStat].level >= quest.requiredLevel;
   };
 
-  const currentQuests: GeneratedQuest[] = {
-    daily: dailyQuests,
-    story: storyQuests,
-    boss: bossQuests,
-  }[activeTab];
+  const currentQuests: GeneratedQuest[] = activeTab === 'history'
+    ? []
+    : { daily: dailyQuests, story: storyQuests, boss: bossQuests }[activeTab as QuestType];
 
   const activeQuests = currentQuests.filter((q) => !isQuestExpired(q));
   const completedToday = activeQuests.filter((q) => isQuestCompleted(q.id)).length;
@@ -106,6 +193,13 @@ export const QuestsScreen: React.FC = () => {
     { key: 'daily', label: 'Ежедневные', emoji: '🔥' },
     { key: 'story', label: 'Сюжетные', emoji: '📖' },
     { key: 'boss', label: 'Боссы', emoji: '💀' },
+    { key: 'history', label: 'История', emoji: '📜' },
+  ];
+
+  const historySubTabs: { key: QuestType; label: string }[] = [
+    { key: 'daily', label: '🔥 Ежедневные' },
+    { key: 'story', label: '📖 Сюжетные' },
+    { key: 'boss', label: '💀 Боссы' },
   ];
 
   return (
@@ -115,11 +209,13 @@ export const QuestsScreen: React.FC = () => {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl
-            refreshing={isGenerating}
-            onRefresh={handleGenerate}
-            tintColor={COLORS.accent}
-          />
+          activeTab !== 'history' ? (
+            <RefreshControl
+              refreshing={isGenerating}
+              onRefresh={handleGenerate}
+              tintColor={COLORS.accent}
+            />
+          ) : undefined
         }
       >
         <Text style={styles.title}>ЗАДАНИЯ</Text>
@@ -151,7 +247,7 @@ export const QuestsScreen: React.FC = () => {
         )}
 
         {/* Нет ключа */}
-        {!deepseekApiKey && (
+        {!deepseekApiKey && activeTab !== 'history' && (
           <View style={styles.noKeyBanner}>
             <Text style={styles.noKeyText}>
               🔑 Добавь DeepSeek API ключ во вкладке + чтобы AI генерировал персональные квесты
@@ -197,118 +293,194 @@ export const QuestsScreen: React.FC = () => {
           ))}
         </View>
 
-        {/* Ошибка */}
-        {!!generateError && (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>⚠️ {generateError}</Text>
+        {/* ─── Вкладка История ─────────────────────────────────────────── */}
+        {activeTab === 'history' && (
+          <View>
+            {/* Под-табы категорий */}
+            <View style={styles.historySubTabs}>
+              {historySubTabs.map((t) => (
+                <TouchableOpacity
+                  key={t.key}
+                  style={[styles.historySubTab, historyTab === t.key && styles.historySubTabActive]}
+                  onPress={() => setHistoryTab(t.key)}
+                >
+                  <Text style={[styles.historySubTabLabel, historyTab === t.key && styles.historySubTabLabelActive]}>
+                    {t.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {(() => {
+              const records = getHistoryByType(historyTab);
+              if (records.length === 0) {
+                return (
+                  <View style={styles.emptyBox}>
+                    <Text style={styles.emptyEmoji}>📜</Text>
+                    <Text style={styles.emptyTitle}>История пуста</Text>
+                    <Text style={styles.emptySubtitle}>Выполненные квесты будут появляться здесь</Text>
+                  </View>
+                );
+              }
+              return (
+                <View style={styles.questsList}>
+                  {records.map((record) => (
+                    <HistoryCard key={record.id} record={record} />
+                  ))}
+                </View>
+              );
+            })()}
           </View>
         )}
 
-        {/* Загрузка */}
-        {isGenerating && activeQuests.length === 0 && (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator color={COLORS.accent} size="large" />
-            <Text style={styles.loadingText}>AI генерирует персональные квесты...</Text>
-          </View>
-        )}
+        {/* ─── Вкладки квестов ─────────────────────────────────────────── */}
+        {activeTab !== 'history' && (
+          <>
+            {/* Ошибка */}
+            {!!generateError && (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>⚠️ {generateError}</Text>
+              </View>
+            )}
 
-        {/* Пусто */}
-        {!isGenerating && activeQuests.length === 0 && (
-          <View style={styles.emptyBox}>
-            <Text style={styles.emptyEmoji}>
-              {activeTab === 'daily' ? '🌅' : activeTab === 'story' ? '📖' : '💀'}
-            </Text>
-            <Text style={styles.emptyTitle}>Квестов нет</Text>
-            <Text style={styles.emptySubtitle}>
-              {deepseekApiKey
-                ? 'Потяни вниз чтобы AI сгенерировал новые'
-                : 'Добавь API ключ во вкладке +'}
-            </Text>
-            {deepseekApiKey && (
-              <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
-                <Text style={styles.generateButtonText}>🤖 СГЕНЕРИРОВАТЬ</Text>
+            {/* Загрузка */}
+            {isGenerating && activeQuests.length === 0 && (
+              <View style={styles.loadingBox}>
+                <ActivityIndicator color={COLORS.accent} size="large" />
+                <Text style={styles.loadingText}>AI генерирует персональные квесты...</Text>
+              </View>
+            )}
+
+            {/* Пусто */}
+            {!isGenerating && activeQuests.length === 0 && (
+              <View style={styles.emptyBox}>
+                <Text style={styles.emptyEmoji}>
+                  {activeTab === 'daily' ? '🌅' : activeTab === 'story' ? '📖' : '💀'}
+                </Text>
+                <Text style={styles.emptyTitle}>Квестов нет</Text>
+                <Text style={styles.emptySubtitle}>
+                  {deepseekApiKey
+                    ? 'Потяни вниз чтобы AI сгенерировал новые'
+                    : 'Добавь API ключ во вкладке +'}
+                </Text>
+                {deepseekApiKey && (
+                  <TouchableOpacity style={styles.generateButton} onPress={handleGenerate}>
+                    <Text style={styles.generateButtonText}>🤖 СГЕНЕРИРОВАТЬ</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {/* Список квестов */}
+            <View style={styles.questsList}>
+              {activeQuests.map((quest) => {
+                const questType = activeTab as QuestType;
+                const done = isQuestCompleted(quest.id);
+                const started = isQuestStarted(quest.id);
+                const startedAt = getQuestStartedAt(quest.id);
+                const unlocked = isUnlocked(quest);
+                const statColor = STAT_COLORS[quest.stat];
+                const diffColor =
+                  quest.difficulty === 'hard'
+                    ? COLORS.danger
+                    : quest.difficulty === 'easy'
+                    ? COLORS.success
+                    : COLORS.accent;
+
+                // Длительность из истории (если уже выполнен)
+                const historyRecord = questHistory.find((r) => r.questId === quest.id);
+
+                return (
+                  <View
+                    key={quest.id}
+                    style={[
+                      styles.questCard,
+                      done && styles.questDone,
+                      !unlocked && styles.questLocked,
+                      { borderLeftColor: done ? COLORS.success : unlocked ? statColor : COLORS.textDim },
+                    ]}
+                  >
+                    <View style={styles.questHeader}>
+                      <Text style={styles.questEmoji}>{quest.emoji}</Text>
+                      <View style={styles.questInfo}>
+                        <Text style={[styles.questTitle, done && styles.questTitleDone]}>
+                          {quest.title}
+                        </Text>
+                        <Text style={styles.questDesc}>{quest.description}</Text>
+                      </View>
+                    </View>
+
+                    {/* Живой таймер (если квест запущен и не выполнен) */}
+                    {started && !done && startedAt !== null && (
+                      <QuestTimer startedAt={startedAt} />
+                    )}
+
+                    {/* Время выполнения (если квест завершён и есть данные) */}
+                    {done && historyRecord?.durationSeconds !== undefined && historyRecord.durationSeconds !== null && (
+                      <Text style={styles.completedDuration}>
+                        ⏱ {formatDuration(historyRecord.durationSeconds)}
+                      </Text>
+                    )}
+
+                    <View style={styles.questMeta}>
+                      <View style={[styles.statPill, { borderColor: statColor + '60' }]}>
+                        <Text style={styles.statPillText}>{STAT_EMOJIS[quest.stat]}</Text>
+                      </View>
+                      <View style={[styles.diffPill, { borderColor: diffColor + '60' }]}>
+                        <Text style={[styles.diffPillText, { color: diffColor }]}>
+                          {quest.difficulty === 'hard' ? '🔥 Сложно' : quest.difficulty === 'easy' ? '😊 Легко' : '⚡ Норм'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.questFooter}>
+                      <Text style={[styles.questXP, { color: statColor }]}>+{quest.xpReward} XP</Text>
+                      {!unlocked ? (
+                        <Text style={styles.questLock}>
+                          🔒 {quest.requiredStat?.toUpperCase()} Lv.{quest.requiredLevel}
+                        </Text>
+                      ) : done ? (
+                        <Text style={styles.questComplete}>✅ Выполнено</Text>
+                      ) : started ? (
+                        <TouchableOpacity
+                          style={[styles.questButton, { backgroundColor: COLORS.success }]}
+                          onPress={() => handleComplete(quest, questType)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.questButtonText}>✓ ВЫПОЛНИЛ</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={[styles.questButton, { backgroundColor: statColor }]}
+                          onPress={() => handleStart(quest, questType)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.questButtonText}>▶ НАЧАТЬ</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Кнопка генерации ещё */}
+            {activeQuests.length > 0 && deepseekApiKey && (
+              <TouchableOpacity
+                style={styles.moreButton}
+                onPress={handleGenerate}
+                disabled={isGenerating}
+              >
+                {isGenerating ? (
+                  <ActivityIndicator color={COLORS.accent} />
+                ) : (
+                  <Text style={styles.moreButtonText}>
+                    {activeTab === 'daily' ? '🔄 Обновить задания' : '➕ Ещё квесты'}
+                  </Text>
+                )}
               </TouchableOpacity>
             )}
-          </View>
-        )}
-
-        {/* Список квестов */}
-        <View style={styles.questsList}>
-          {activeQuests.map((quest) => {
-            const done = isQuestCompleted(quest.id);
-            const unlocked = isUnlocked(quest);
-            const statColor = STAT_COLORS[quest.stat];
-            const diffColor = quest.difficulty === 'hard' ? COLORS.danger : quest.difficulty === 'easy' ? COLORS.success : COLORS.accent;
-
-            return (
-              <View
-                key={quest.id}
-                style={[
-                  styles.questCard,
-                  done && styles.questDone,
-                  !unlocked && styles.questLocked,
-                  { borderLeftColor: done ? COLORS.success : unlocked ? statColor : COLORS.textDim },
-                ]}
-              >
-                <View style={styles.questHeader}>
-                  <Text style={styles.questEmoji}>{quest.emoji}</Text>
-                  <View style={styles.questInfo}>
-                    <Text style={[styles.questTitle, done && styles.questTitleDone]}>
-                      {quest.title}
-                    </Text>
-                    <Text style={styles.questDesc}>{quest.description}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.questMeta}>
-                  <View style={[styles.statPill, { borderColor: statColor + '60' }]}>
-                    <Text style={styles.statPillText}>{STAT_EMOJIS[quest.stat]}</Text>
-                  </View>
-                  <View style={[styles.diffPill, { borderColor: diffColor + '60' }]}>
-                    <Text style={[styles.diffPillText, { color: diffColor }]}>
-                      {quest.difficulty === 'hard' ? '🔥 Сложно' : quest.difficulty === 'easy' ? '😊 Легко' : '⚡ Норм'}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.questFooter}>
-                  <Text style={[styles.questXP, { color: statColor }]}>+{quest.xpReward} XP</Text>
-                  {!unlocked ? (
-                    <Text style={styles.questLock}>
-                      🔒 {quest.requiredStat?.toUpperCase()} Lv.{quest.requiredLevel}
-                    </Text>
-                  ) : done ? (
-                    <Text style={styles.questComplete}>✅ Выполнено</Text>
-                  ) : (
-                    <TouchableOpacity
-                      style={[styles.questButton, { backgroundColor: statColor }]}
-                      onPress={() => handleComplete(quest)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.questButtonText}>ВЫПОЛНИТЬ</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-            );
-          })}
-        </View>
-
-        {/* Кнопка генерации ещё */}
-        {activeQuests.length > 0 && deepseekApiKey && (
-          <TouchableOpacity
-            style={styles.moreButton}
-            onPress={handleGenerate}
-            disabled={isGenerating}
-          >
-            {isGenerating ? (
-              <ActivityIndicator color={COLORS.accent} />
-            ) : (
-              <Text style={styles.moreButtonText}>
-                {activeTab === 'daily' ? '🔄 Обновить задания' : '➕ Ещё квесты'}
-              </Text>
-            )}
-          </TouchableOpacity>
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -420,8 +592,29 @@ const styles = StyleSheet.create({
   },
   tab: { flex: 1, paddingVertical: SPACING.sm, borderRadius: BORDER_RADIUS.sm, alignItems: 'center' },
   tabActive: { backgroundColor: COLORS.accent },
-  tabLabel: { fontSize: 11, color: COLORS.textMuted, fontWeight: FONTS.weight.medium },
+  tabLabel: { fontSize: 10, color: COLORS.textMuted, fontWeight: FONTS.weight.medium, textAlign: 'center' },
   tabLabelActive: { color: COLORS.white, fontWeight: FONTS.weight.bold },
+
+  historySubTabs: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    marginBottom: SPACING.lg,
+  },
+  historySubTab: {
+    flex: 1,
+    paddingVertical: SPACING.sm,
+    borderRadius: BORDER_RADIUS.sm,
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+  },
+  historySubTabActive: {
+    borderColor: COLORS.accent,
+    backgroundColor: COLORS.accent + '20',
+  },
+  historySubTabLabel: { fontSize: 11, color: COLORS.textMuted, fontWeight: FONTS.weight.medium },
+  historySubTabLabelActive: { color: COLORS.accent, fontWeight: FONTS.weight.bold },
 
   errorBox: {
     backgroundColor: '#1A0A0A',
@@ -468,6 +661,7 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
   },
   questDone: { backgroundColor: '#0A150A', borderColor: '#10B98120' },
+  historyCard: { backgroundColor: '#0A100A', borderColor: '#10B98115' },
   questLocked: { opacity: 0.5 },
   questHeader: { flexDirection: 'row', gap: SPACING.md },
   questEmoji: { fontSize: 28 },
@@ -475,6 +669,20 @@ const styles = StyleSheet.create({
   questTitle: { fontSize: FONTS.size.md, fontWeight: FONTS.weight.bold, color: COLORS.text },
   questTitleDone: { color: COLORS.textMuted },
   questDesc: { fontSize: FONTS.size.sm, color: COLORS.textMuted, lineHeight: 18 },
+
+  timerText: {
+    fontSize: FONTS.size.lg,
+    fontWeight: FONTS.weight.black,
+    color: COLORS.accent,
+    textAlign: 'center',
+    letterSpacing: 2,
+    paddingVertical: SPACING.xs,
+  },
+  completedDuration: {
+    fontSize: FONTS.size.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+  },
 
   questMeta: { flexDirection: 'row', gap: SPACING.sm },
   statPill: {
@@ -502,6 +710,9 @@ const styles = StyleSheet.create({
     borderRadius: BORDER_RADIUS.sm,
   },
   questButtonText: { color: COLORS.white, fontSize: FONTS.size.sm, fontWeight: FONTS.weight.black, letterSpacing: 1 },
+
+  historyMeta: { flexDirection: 'row', gap: SPACING.md, alignItems: 'center' },
+  historyDuration: { fontSize: FONTS.size.sm, color: COLORS.textMuted },
 
   moreButton: {
     marginTop: SPACING.lg,

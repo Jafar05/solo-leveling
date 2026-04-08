@@ -6,6 +6,29 @@ import { StatKey, Stat } from '../engine/types';
 import { todayStr } from '../engine/xp';
 import { BehavioralProfile } from '../engine/adaptiveEngine';
 
+export type QuestType = 'daily' | 'story' | 'boss';
+
+export interface CompletedQuestRecord {
+  id: string; // уникальный id записи
+  questId: string;
+  title: string;
+  emoji: string;
+  stat: StatKey;
+  xpReward: number;
+  questType: QuestType;
+  startedAt: number | null; // null если запущен без таймера
+  completedAt: number;
+  durationSeconds: number | null;
+}
+
+interface CompletedQuestMeta {
+  title: string;
+  emoji: string;
+  stat: StatKey;
+  xpReward: number;
+  questType: QuestType;
+}
+
 export interface PunishmentTask {
   id: string;
   date: string;
@@ -35,6 +58,13 @@ interface QuestStore {
   completedIds: string[]; // Все выполненные за всё время
   penalties: DailyPenalty[]; // История штрафов
 
+  // Таймеры активных квестов: questId → timestamp запуска
+  activeQuestTimers: Record<string, number>;
+  // Идентификаторы запланированных уведомлений: questId → [notifId, ...]
+  questNotificationIds: Record<string, string[]>;
+  // История выполненных квестов
+  questHistory: CompletedQuestRecord[];
+
   isGenerating: boolean;
   generateError: string;
 
@@ -47,11 +77,16 @@ interface QuestStore {
   refreshUncompletedQuests: (stats: Record<StatKey, Stat>, apiKey: string, profile?: BehavioralProfile) => Promise<void>;
   generateStoryQuests: (stats: Record<StatKey, Stat>, apiKey: string, profile?: BehavioralProfile) => Promise<void>;
   generateBossQuests: (stats: Record<StatKey, Stat>, apiKey: string, profile?: BehavioralProfile) => Promise<void>;
-  completeQuest: (id: string) => void;
+  startQuest: (questId: string) => void;
+  setQuestNotificationIds: (questId: string, ids: string[]) => void;
+  completeQuest: (id: string, meta?: CompletedQuestMeta) => void;
   completePunishment: (date: string) => void;
   isQuestCompleted: (id: string) => boolean;
+  isQuestStarted: (id: string) => boolean;
+  getQuestStartedAt: (id: string) => number | null;
   getTodayPenalty: () => DailyPenalty | null;
   getActivePunishments: () => PunishmentTask[];
+  getHistoryByType: (type: QuestType) => CompletedQuestRecord[];
 }
 
 const PUNISHMENT_POOL: Array<{ emoji: string; title: string; description: (n: number) => string }> = [
@@ -133,6 +168,9 @@ export const useQuestStore = create<QuestStore>()(
       bossQuests: [],
       completedIds: [],
       penalties: [],
+      activeQuestTimers: {},
+      questNotificationIds: {},
+      questHistory: [],
       isGenerating: false,
       generateError: '',
 
@@ -230,8 +268,52 @@ export const useQuestStore = create<QuestStore>()(
         }
       },
 
-      completeQuest: (id) =>
-        set((state) => ({ completedIds: [...state.completedIds, id] })),
+      startQuest: (questId) =>
+        set((state) => ({
+          activeQuestTimers: { ...state.activeQuestTimers, [questId]: Date.now() },
+        })),
+
+      setQuestNotificationIds: (questId, ids) =>
+        set((state) => ({
+          questNotificationIds: { ...state.questNotificationIds, [questId]: ids },
+        })),
+
+      completeQuest: (id, meta) =>
+        set((state) => {
+          const startedAt = state.activeQuestTimers[id] ?? null;
+          const completedAt = Date.now();
+          const durationSeconds = startedAt ? Math.floor((completedAt - startedAt) / 1000) : null;
+
+          // Очищаем таймер и уведомления для этого квеста
+          const activeQuestTimers = { ...state.activeQuestTimers };
+          delete activeQuestTimers[id];
+          const questNotificationIds = { ...state.questNotificationIds };
+          delete questNotificationIds[id];
+
+          const historyRecord: CompletedQuestRecord | null = meta
+            ? {
+                id: `${id}-${completedAt}`,
+                questId: id,
+                title: meta.title,
+                emoji: meta.emoji,
+                stat: meta.stat,
+                xpReward: meta.xpReward,
+                questType: meta.questType,
+                startedAt,
+                completedAt,
+                durationSeconds,
+              }
+            : null;
+
+          return {
+            completedIds: [...state.completedIds, id],
+            activeQuestTimers,
+            questNotificationIds,
+            questHistory: historyRecord
+              ? [...state.questHistory, historyRecord]
+              : state.questHistory,
+          };
+        }),
 
       completePunishment: (date) =>
         set((state) => ({
@@ -243,6 +325,8 @@ export const useQuestStore = create<QuestStore>()(
         })),
 
       isQuestCompleted: (id) => get().completedIds.includes(id),
+      isQuestStarted: (id) => id in get().activeQuestTimers,
+      getQuestStartedAt: (id) => get().activeQuestTimers[id] ?? null,
 
       getTodayPenalty: () => {
         // Возвращает первое невыполненное наказание
@@ -254,6 +338,9 @@ export const useQuestStore = create<QuestStore>()(
           .filter((p) => p.applied && !p.punishmentTask.completed)
           .map((p) => p.punishmentTask);
       },
+
+      getHistoryByType: (type) =>
+        get().questHistory.filter((r) => r.questType === type).reverse(),
     }),
     {
       name: 'solo-leveling-quests',
