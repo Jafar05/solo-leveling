@@ -71,16 +71,13 @@ function QuestTimer({ startedAt }: { startedAt: number }) {
 
 function HistoryCard({ record }: { record: CompletedQuestRecord }) {
   const statColor = STAT_COLORS[record.stat];
-  const completedDate = new Date(record.completedAt);
-  const dateStr = completedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 
   return (
-    <View style={[styles.questCard, styles.historyCard, { borderLeftColor: statColor }]}>
+    <View style={[styles.questCard, styles.historyCard, styles.historyCardSpacing, { borderLeftColor: statColor }]}>
       <View style={styles.questHeader}>
         <Text style={styles.questEmoji}>{record.emoji}</Text>
         <View style={styles.questInfo}>
           <Text style={[styles.questTitle, styles.questTitleDone]}>{record.title}</Text>
-          <Text style={styles.questDesc}>{dateStr}</Text>
         </View>
       </View>
       <View style={styles.questFooter}>
@@ -322,10 +319,30 @@ export const QuestsScreen: React.FC = () => {
                   </View>
                 );
               }
+
+              // Группировка по дате
+              const groups: { dateLabel: string; items: typeof records }[] = [];
+              for (const record of records) {
+                const dateLabel = record.completedAt
+                  ? new Date(record.completedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+                  : 'Дата неизвестна';
+                const last = groups[groups.length - 1];
+                if (last && last.dateLabel === dateLabel) {
+                  last.items.push(record);
+                } else {
+                  groups.push({ dateLabel, items: [record] });
+                }
+              }
+
               return (
                 <View style={styles.questsList}>
-                  {records.map((record) => (
-                    <HistoryCard key={record.id} record={record} />
+                  {groups.map((group) => (
+                    <View key={group.dateLabel}>
+                      <Text style={styles.historyDateHeader}>{group.dateLabel}</Text>
+                      {group.items.map((record) => (
+                        <HistoryCard key={record.id} record={record} />
+                      ))}
+                    </View>
                   ))}
                 </View>
               );
@@ -651,6 +668,15 @@ const styles = StyleSheet.create({
   generateButtonText: { color: COLORS.white, fontWeight: FONTS.weight.bold, letterSpacing: 1 },
 
   questsList: { gap: SPACING.md },
+  historyDateHeader: {
+    fontSize: FONTS.size.sm,
+    fontWeight: FONTS.weight.bold,
+    color: COLORS.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: SPACING.sm,
+    marginTop: SPACING.md,
+  },
   questCard: {
     backgroundColor: COLORS.card,
     borderRadius: BORDER_RADIUS.md,
@@ -662,6 +688,7 @@ const styles = StyleSheet.create({
   },
   questDone: { backgroundColor: '#0A150A', borderColor: '#10B98120' },
   historyCard: { backgroundColor: '#0A100A', borderColor: '#10B98115' },
+  historyCardSpacing: { marginBottom: SPACING.sm },
   questLocked: { opacity: 0.5 },
   questHeader: { flexDirection: 'row', gap: SPACING.md },
   questEmoji: { fontSize: 28 },
