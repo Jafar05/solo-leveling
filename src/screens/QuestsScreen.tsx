@@ -166,6 +166,7 @@ export const QuestsScreen: React.FC = () => {
 
     completeQuest(quest.id, {
       title: quest.title,
+      description: quest.description,
       emoji: quest.emoji,
       stat: quest.stat,
       xpReward: quest.xpReward,

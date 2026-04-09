@@ -12,6 +12,7 @@ export interface CompletedQuestRecord {
   id: string; // уникальный id записи
   questId: string;
   title: string;
+  description: string;
   emoji: string;
   stat: StatKey;
   xpReward: number;
@@ -23,6 +24,7 @@ export interface CompletedQuestRecord {
 
 interface CompletedQuestMeta {
   title: string;
+  description: string;
   emoji: string;
   stat: StatKey;
   xpReward: number;
@@ -295,6 +297,7 @@ export const useQuestStore = create<QuestStore>()(
                 id: `${id}-${completedAt}`,
                 questId: id,
                 title: meta.title,
+                description: meta.description,
                 emoji: meta.emoji,
                 stat: meta.stat,
                 xpReward: meta.xpReward,
