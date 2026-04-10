@@ -78,6 +78,9 @@ function HistoryCard({ record }: { record: CompletedQuestRecord }) {
         <Text style={styles.questEmoji}>{record.emoji}</Text>
         <View style={styles.questInfo}>
           <Text style={[styles.questTitle, styles.questTitleDone]}>{record.title}</Text>
+          {!!record.description && (
+            <Text style={styles.questDescription}>{record.description}</Text>
+          )}
         </View>
       </View>
       <View style={styles.questFooter}>
@@ -696,6 +699,7 @@ const styles = StyleSheet.create({
   questInfo: { flex: 1, gap: 4 },
   questTitle: { fontSize: FONTS.size.md, fontWeight: FONTS.weight.bold, color: COLORS.text },
   questTitleDone: { color: COLORS.textMuted },
+  questDescription: { fontSize: FONTS.size.sm, color: COLORS.textMuted, marginTop: 2 },
   questDesc: { fontSize: FONTS.size.sm, color: COLORS.textMuted, lineHeight: 18 },
 
   timerText: {

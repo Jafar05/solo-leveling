@@ -5,6 +5,7 @@ import { GeneratedQuest, generateQuests } from '../engine/questAI';
 import { StatKey, Stat } from '../engine/types';
 import { todayStr } from '../engine/xp';
 import { BehavioralProfile } from '../engine/adaptiveEngine';
+import { useLifeProfileStore } from './useLifeProfileStore';
 
 export type QuestType = 'daily' | 'story' | 'boss';
 
@@ -231,7 +232,8 @@ export const useQuestStore = create<QuestStore>()(
           const needed = Math.max(1, 7 - completedToday.length);
 
           // Генерируем новые квесты с учётом адаптивного профиля
-          const newQuests = await generateQuests('daily', needed, stats, apiKey, Array.from(coveredStats), profile);
+          const lifeContext = useLifeProfileStore.getState().buildLifeSummaryForAI();
+          const newQuests = await generateQuests('daily', needed, stats, apiKey, Array.from(coveredStats), profile, lifeContext);
 
           // Итоговый список: выполненные + новые
           set({
@@ -249,7 +251,8 @@ export const useQuestStore = create<QuestStore>()(
       generateStoryQuests: async (stats, apiKey, profile) => {
         set({ isGenerating: true, generateError: '' });
         try {
-          const quests = await generateQuests('story', 5, stats, apiKey, [], profile);
+          const lifeContext = useLifeProfileStore.getState().buildLifeSummaryForAI();
+          const quests = await generateQuests('story', 5, stats, apiKey, [], profile, lifeContext);
           set((state) => ({ storyQuests: [...state.storyQuests, ...quests] }));
         } catch (e: any) {
           set({ generateError: e?.message ?? 'Ошибка генерации' });
@@ -261,7 +264,8 @@ export const useQuestStore = create<QuestStore>()(
       generateBossQuests: async (stats, apiKey, profile) => {
         set({ isGenerating: true, generateError: '' });
         try {
-          const quests = await generateQuests('boss', 3, stats, apiKey, [], profile);
+          const lifeContext = useLifeProfileStore.getState().buildLifeSummaryForAI();
+          const quests = await generateQuests('boss', 3, stats, apiKey, [], profile, lifeContext);
           set((state) => ({ bossQuests: [...state.bossQuests, ...quests] }));
         } catch (e: any) {
           set({ generateError: e?.message ?? 'Ошибка генерации' });

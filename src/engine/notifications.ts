@@ -55,6 +55,26 @@ export async function scheduleDailyNotifications(): Promise<void> {
       trigger: { type: 'daily', hour: 20, minute: 0 },
     });
 
+    // 19:00 — Напоминание прочитать экспертный совет
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: '🧠 Экспертный совет ждёт',
+        body: 'У тебя есть персональная рекомендация от AI. Прочитай её и примени сегодня!',
+        sound: true,
+      },
+      trigger: { type: 'daily', hour: 19, minute: 0 },
+    });
+
+    // 20:30 — Повторное напоминание о совете
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: '⚡ Не забудь прочитать совет',
+        body: 'Твой персональный совет от AI может изменить подход к делу. Открой и прочитай!',
+        sound: true,
+      },
+      trigger: { type: 'daily', hour: 20, minute: 30 },
+    });
+
     // 22:00 — Дедлайн квестов
     await Notifications.scheduleNotificationAsync({
       content: {

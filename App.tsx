@@ -4,6 +4,8 @@ import { StatusBar } from 'expo-status-bar';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { setupNotificationHandler, requestNotificationPermissions, scheduleDailyNotifications } from './src/engine/notifications';
 import { JournalBlockerModal } from './src/components/JournalBlockerModal';
+import { ContextBlockerModal } from './src/components/ContextBlockerModal';
+import { InsightBlockerModal } from './src/components/InsightBlockerModal';
 import { useJournalStore } from './src/store/useJournalStore';
 
 setupNotificationHandler();
@@ -25,7 +27,9 @@ export default function App() {
     <>
       <StatusBar style="light" />
       <AppNavigator />
+      <ContextBlockerModal />
       <JournalBlockerModal />
+      <InsightBlockerModal />
     </>
   );
 }

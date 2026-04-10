@@ -2,19 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { BehavioralProfile } from '../engine/adaptiveEngine';
 import { StatKey } from '../engine/types';
-import { COLORS, STAT_COLORS, STAT_EMOJIS, FONTS, SPACING, BORDER_RADIUS } from '../theme';
-
-const STAT_SHORT: Record<StatKey, string> = {
-  str: 'СИЛ',
-  int: 'ИНТ',
-  cha: 'ХАР',
-  soc: 'СОЦ',
-  biz: 'БИЗ',
-  vit: 'ЗДР',
-  wil: 'ВОЛ',
-  sty: 'СТИ',
-  kar: 'КАР',
-};
+import { COLORS, STAT_COLORS, STAT_EMOJIS, STAT_FULL_LABELS, FONTS, SPACING, BORDER_RADIUS } from '../theme';
 
 interface Props {
   profile: BehavioralProfile;
@@ -33,7 +21,7 @@ function StatTag({
     <View style={[styles.tag, { backgroundColor: color + '18', borderColor: color + '50' }]}>
       <Text style={styles.tagEmoji}>{STAT_EMOJIS[stat]}</Text>
       <Text style={[styles.tagText, { color }]}>
-        {STAT_SHORT[stat]}
+        {STAT_FULL_LABELS[stat]}
         {label ? ` · ${label}` : ''}
       </Text>
     </View>

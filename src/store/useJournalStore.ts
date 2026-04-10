@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { todayStr } from '../engine/xp';
+import { useLifeProfileStore, SphereContext } from './useLifeProfileStore';
+import { StatKey } from '../engine/types';
 
 export interface JournalEntry {
   date: string;
@@ -38,9 +40,34 @@ const QUESTIONS = [
   'Назови три вещи, за которые ты благодарен сегодня.',
 ];
 
-function getQuestionForDate(date: string): string {
+const STAT_FULL: Record<StatKey, string> = {
+  str: 'Сила', int: 'Интеллект', cha: 'Харизма', soc: 'Социальная жизнь',
+  biz: 'Бизнес', vit: 'Здоровье', wil: 'Воля', sty: 'Стиль', kar: 'Карма',
+};
+
+function getSmartQuestion(date: string): string {
   const dayHash = date.split('-').reduce((a, b) => a + parseInt(b), 0);
-  return QUESTIONS[dayHash % QUESTIONS.length];
+  const { sphereContexts } = useLifeProfileStore.getState();
+  const contexts = Object.values(sphereContexts).filter(Boolean) as SphereContext[];
+
+  if (contexts.length === 0) {
+    return QUESTIONS[dayHash % QUESTIONS.length];
+  }
+
+  // Выбираем сферу на основе дня (ротация)
+  const ctx = contexts[dayHash % contexts.length];
+  const label = STAT_FULL[ctx.stat];
+
+  const templates = [
+    `Что сегодня продвинулось в "${ctx.goal}"? Что конкретно сделал?`,
+    `В сфере ${label}: оцени свой день от 1 до 10 и объясни почему именно столько.`,
+    `Что помешало сегодня продвинуться в ${label}? Как устранишь это завтра?`,
+    `Что нового узнал или попробовал сегодня для достижения "${ctx.goal}"?`,
+    `Самый важный урок дня в сфере ${label}. Что запомнишь?`,
+    `"${ctx.goal}" — ты на верном пути? Что нужно скорректировать?`,
+  ];
+
+  return templates[dayHash % templates.length];
 }
 
 export const useJournalStore = create<JournalStore>()(
@@ -54,7 +81,7 @@ export const useJournalStore = create<JournalStore>()(
         if (!existing) {
           const newEntry: JournalEntry = {
             date: today,
-            question: getQuestionForDate(today),
+            question: getSmartQuestion(today),
             answer: '',
             answeredAt: null,
           };

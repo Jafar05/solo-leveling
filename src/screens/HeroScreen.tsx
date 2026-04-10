@@ -12,6 +12,7 @@ import { RadarChart } from '../components/RadarChart';
 import { StatBar } from '../components/StatBar';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { AdaptiveInsights } from '../components/AdaptiveInsights';
+import { ExpertCoach } from '../components/ExpertCoach';
 import { buildBehavioralProfile } from '../engine/adaptiveEngine';
 import {
   characterLevel,
@@ -138,6 +139,9 @@ export const HeroScreen: React.FC = () => {
             </Text>
           </View>
         )}
+
+        {/* Личный коуч */}
+        <ExpertCoach behavioralProfile={adaptiveProfile} />
 
         {/* Адаптивный анализ */}
         <AdaptiveInsights profile={adaptiveProfile} />

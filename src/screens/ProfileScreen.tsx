@@ -208,7 +208,10 @@ export const ProfileScreen: React.FC = () => {
             ) : (
               [...journalEntries].reverse().map((entry) => (
                 <View key={entry.id} style={styles.entryCard}>
-                  <Text style={styles.entryDate}>{entry.date}</Text>
+                  <Text style={styles.entryDate}>
+                    {entry.date}
+                    {entry.createdAt ? ` · ${new Date(entry.createdAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                  </Text>
                   <Text style={styles.entryQuestion}>{entry.question}</Text>
                   <Text style={styles.entryAnswer}>{entry.answer}</Text>
                 </View>
